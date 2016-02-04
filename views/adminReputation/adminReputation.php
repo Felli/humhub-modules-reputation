@@ -18,7 +18,7 @@
         <?php echo '<br><br>' ?>
         <?php echo Yii::t('ReputationModule.views_adminReputation_show', 'In the area below, you see how much reputation each member inside this space has gained.'); ?>
         <br/><br/>
-        <?php echo CHtml::form($this->createUrl('//reputation/adminReputation/show', array('sguid' => $space->guid)), 'post'); ?>
+        <?php echo Html::form($this->createUrl('//reputation/adminReputation/show', array('sguid' => $space->guid)), 'post'); ?>
 
         <table class="table table-hover">
             <thead>
@@ -53,16 +53,16 @@
 
                     </td>
                     <td style="vertical-align:middle">
-                        <strong><?php echo CHtml::link($user->displayName, $user->getProfileUrl()); ?></strong>
+                        <strong><?php echo Html::link($user->displayName, $user->getProfileUrl()); ?></strong>
                         <br/>
                     </td>
 
                     <td style="vertical-align:middle; text-align:center">
                         <strong>
                             <?php if ($function == ReputationUser::LINEAR) {
-                                echo CHtml::encode($reputation->value);
+                                echo Html::encode($reputation->value);
                             } else {
-                                echo CHtml::encode($reputation->value) . '%';
+                                echo Html::encode($reputation->value) . '%';
                             } ?>
                         </strong>
                     </td>
@@ -88,18 +88,18 @@
         </div>
 
         <hr>
-        <?php echo CHtml::link(Yii::t('ReputationModule.views_adminReputation_show', 'Update'), array('//reputation/adminReputation/show', 'sguid' => $this->getSpace()->guid, 'forceUpdate' => true), array('class' => 'btn btn-primary')); ?>
+        <?php echo Html::link(Yii::t('ReputationModule.views_adminReputation_show', 'Update'), array('//reputation/adminReputation/show', 'sguid' => $this->getSpace()->guid, 'forceUpdate' => true), array('class' => 'btn btn-primary')); ?>
 
         <div class="pull-right">
-            <?php echo CHtml::link(Yii::t('ReputationModule.views_adminReputation_show', 'Configuration'), array('//reputation/adminReputation/configuration', 'sguid' => $this->getSpace()->guid), array('class' => 'btn btn-warning')); ?>
+            <?php echo Html::link(Yii::t('ReputationModule.views_adminReputation_show', 'Configuration'), array('//reputation/adminReputation/configuration', 'sguid' => $this->getSpace()->guid), array('class' => 'btn btn-warning')); ?>
             <?php if ($function == ReputationUser::LOGARITHMIC): ?>
-                <?php echo CHtml::link(Yii::t('ReputationModule.views_adminReputation_show', "Export as CSV"), $space->createUrl('//reputation/adminReputation/export'), array('class' => 'btn btn-danger', 'data-toggle' => 'modal', 'data-target' => '#globalModal')); ?>
+                <?php echo Html::link(Yii::t('ReputationModule.views_adminReputation_show', "Export as CSV"), $space->createUrl('//reputation/adminReputation/export'), array('class' => 'btn btn-danger', 'data-toggle' => 'modal', 'data-target' => '#globalModal')); ?>
             <?php else: ?>
-                <?php echo CHtml::link(Yii::t('ReputationModule.views_adminReputation_show', "Export as CSV"), $space->createUrl('//reputation/adminReputation/export'), array('class' => 'btn btn-danger')); ?>
+                <?php echo Html::link(Yii::t('ReputationModule.views_adminReputation_show', "Export as CSV"), $space->createUrl('//reputation/adminReputation/export'), array('class' => 'btn btn-danger')); ?>
             <?php endif ?>
         </div>
 
 
-        <?php echo Chtml::endForm(); ?>
+        <?php echo html::endForm(); ?>
     </div>
 </div>
