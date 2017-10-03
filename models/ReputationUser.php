@@ -9,49 +9,49 @@
  * @property integer $visibility
  * @property integer $user_id
  * @property integer $space_id
+ * @property integer $wall_id
  * @property string $created_at
  * @property integer $created_by
  * @property string $updated_at
  * @property integer $updated_by
  *
- * @author Anton Kurnitzky
- */
-class ReputationUser extends ReputationBase
-{
-    /*
-     * Key-Value pair
-     * Key: YY-MM-DD
-     * Value: The reputation score the user gained on this day
-     */
-    private $daily_reputation = array();
+ * @author Anton Kurnitzky (v0.11) & Philipp Horna (v0.20+) */
+
+namespace humhub\modules\reputation\models;
+
+use humhub\modules\comment\models\Comment;
+use humhub\modules\content\models\Content;
+use humhub\modules\like\models\Like;
+use humhub\modules\space\models\Membership;
+use Yii;
+use yii\db\Exception;
+
+class ReputationUser extends ReputationBase {
+
+    private static $daily_reputation = array();
 
     /**
-     * @return string the associated database table name
+     * @inheritdoc
      */
-    public function tableName()
-    {
+    public static function tableName() {
         return 'reputation_user';
     }
 
     /**
      * @return array validation rules for model attributes.
      */
-    public function rules()
-    {
-        // NOTE: you should only define rules for those attributes that
-        // will receive user inputs.
+    public function rules() {
         return array(
-            array('value, visibility, user_id, space_id', 'required'),
-            array('value, visibility, user_id, space_id, created_by, updated_by', 'numerical', 'integerOnly' => true),
-            array('created_at, updated_at', 'safe'),
+            [['value', 'visibility', 'user_id', 'space_id', 'wall_id'], 'required'],
+            [['value', 'visibility', 'user_id', 'space_id', 'wall_id', 'created_by', 'updated_by'], 'integer',],
+            [['created_at', 'updated_at'], 'safe']
         );
     }
 
     /**
-     * @return array relational rules.
+     * @return array relational rules.  
      */
-    public function relations()
-    {
+    public function relations() {
         return array(
             'user' => array(self::BELONGS_TO, 'User', 'user_id'),
             'space' => array(self::BELONGS_TO, 'Space', 'space_id'),
@@ -61,14 +61,14 @@ class ReputationUser extends ReputationBase
     /**
      * @return array customized attribute labels (name=>label)
      */
-    public function attributeLabels()
-    {
+    public function attributeLabels() {
         return array(
             'id' => 'ID',
             'value' => 'Value',
             'visibility' => 'Visibility',
             'user_id' => 'User',
-            'space_id' => 'Space',
+            'space_id' => 'Space ID',
+            'wall_id' => 'ContentContainer wall_id',
             'created_at' => 'Created At',
             'created_by' => 'Created By',
             'updated_at' => 'Updated At',
@@ -81,55 +81,42 @@ class ReputationUser extends ReputationBase
      * @param $space : The space to check
      * @param bool $forceUpdate : Ignore cache
      */
-    public function updateUserReputation($space, $forceUpdate = false)
-    {
-        $spaceId = $space->id;
+    public function updateUserReputation($container, $forceUpdate = false) {
 
         // get all users from this space
-        $attributes = array('space_id' => $spaceId);
-        $spaceUsers = SpaceMembership::model()->findAllByAttributes($attributes);
+        $attributes = array('space_id' => $container->id);
+        $spaceUsers = Membership::findAll($attributes);
 
         foreach ($spaceUsers as $user) {
 
-            $cacheId = 'reputation_space_user' . '_' . $spaceId . '_' . $user->user_id;
-            $userReputation = Yii::app()->cache->get($cacheId);
+            $cacheId = 'reputation_space_user' . '_' . $container->wall_id . '_' . $user->user_id;
+            $userReputation = Yii::$app->cache->get($cacheId);
 
             if ($userReputation === false || $forceUpdate === true) {
 
                 // get all reputation_user objects from this space
-                $attributes = array('user_id' => $user->user_id, 'space_id' => $spaceId);
-                $userReputation = ReputationUser::model()->findByAttributes($attributes);
+                $condition = array('user_id' => $user->user_id, 'space_id' => $container->id);
+                $userReputation = ReputationUser::findOne($condition);
 
-                if ($userReputation == null && !Yii::app()->user->isGuest) {
+                if ($userReputation == null) {
                     // Create new reputation_user entry
                     $userReputation = new ReputationUser;
                     $userReputation->user_id = $user->user_id;
-                    $userReputation->space_id = $spaceId;
+                    $userReputation->space_id = $container->id;
+                    $userReputation->wall_id = $container->wall_id;
                     $userReputation->visibility = 0;
                     $userReputation->created_by = $user->user_id;
-
                 }
-                $userReputation->value = $this->calculateUserReputationScore($user->user_id, $space, $forceUpdate);
+                $userReputation->value = ReputationUser::calculateUserReputationScore($user->user_id, $container, $forceUpdate);
                 $userReputation->updated_at = date('Y-m-d H:i:s');
-
+                $userReputation->updated_by = $container->updated_by;
                 $userReputation->save();
 
-                Yii::app()->cache->set($cacheId, $userReputation, ReputationBase::CACHE_TIME_SECONDS);
+                Yii::$app->cache->set($cacheId, $userReputation, ReputationBase::CACHE_TIME_SECONDS);
             }
         }
 
-        $this->deleteMissingUsers($spaceId);
-    }
-
-    /**
-     * Returns the static model of the specified AR class.
-     * Please note that you should have this exact method in all your CActiveRecord descendants!
-     * @param string $className active record class name.
-     * @return ReputationUser the static model class
-     */
-    public static function model($className = __CLASS__)
-    {
-        return parent::model($className);
+        ReputationUser::deleteMissingUsers($container->wall_id);
     }
 
     /**
@@ -139,16 +126,15 @@ class ReputationUser extends ReputationBase
      * Include limitations in calculate like weight decrease and daily limit
      *
      * @param $userId : The userId to calculate reputation for
-     * @param $space : The space the calculation is being based on
+     * @param $container : The Space (contentContainer)  the calculation is being based on
      * @return int: User reputation score inside this space
      */
-    private function calculateUserReputationScore($userId, $space, $forceUpdate = false)
-    {
-        $spaceSettings = $this->getSpaceSettings($space); // array containg all space settings
-        $dailyLimit = $spaceSettings[6]; // max points a user can receive on one single day
-        $decreaseWeighting = $spaceSettings[7];  // should weighting of repeating actions be decreased
+    private function calculateUserReputationScore($userId, $container, $forceUpdate = false) {
+        $spaceSettings = ReputationBase::getSpaceSettings($container); 
+        $dailyLimit = $spaceSettings['daily_limit']; 
+        $decreaseWeighting = $spaceSettings['decrease_weighting'];  
 
-        $spaceContent = $this->getContentFromSpace($space->id, $forceUpdate);
+        $spaceContent = ReputationBase::getContentFromSpace($container, $forceUpdate);
 
         foreach ($spaceContent as $content) {
             /*
@@ -157,58 +143,50 @@ class ReputationUser extends ReputationBase
              * e.g. the second like only gives the user half the points from the first like
              */
             $scoreCount = 1;
-
             /*
              * handle content that is created by this user
              * use likes, favorites, comments from content that user created
              */
             if ($content->created_by == $userId) {
-                $this->addToDailyReputation($content, $spaceSettings[2], $dailyLimit);
-
+                ReputationUser::addToDailyReputation($content, $spaceSettings['create_content'], $dailyLimit);
                 // now count the likes this content received from other users
                 $cacheId = 'likes_earned_cache_' . $userId . '_' . $content->id;
-                $likes = $this->getLikesFromContent($content, $userId, $cacheId, $forceUpdate);
+                $likes = ReputationBase::getLikesFromContent($content, $userId, $cacheId, $forceUpdate);
                 foreach ($likes as $like) {
                     if ($decreaseWeighting == '1') {
-                        $this->addToDailyReputation($like, $spaceSettings[3] / $scoreCount, $dailyLimit);
+                        ReputationUser::addToDailyReputation($like, $spaceSettings['smb_likes_content'] / $scoreCount, $dailyLimit);
                     } else {
-                        $this->addToDailyReputation($like, $spaceSettings[3], $dailyLimit);
+                        ReputationUser::addToDailyReputation($like, $spaceSettings['smb_likes_content'], $dailyLimit);
                     }
-
                     $scoreCount++;
                 }
 
-                if ($space->isModuleEnabled('favorite')) {
+                if ($container->isModuleEnabled('favorite')) {
                     $scoreCount = 1;
                     // now count the favorites this content received from other users
                     $cacheId = 'favorites_earned_cache_' . $userId . '_' . $content->id;
-                    $favorites = $this->getFavoritesFromContent($content, $userId, $cacheId, $forceUpdate);
+                    $favorites = ReputationBase::getFavoritesFromContent($content, $userId, $cacheId, $forceUpdate);
                     foreach ($favorites as $favorite) {
                         if ($decreaseWeighting == '1') {
-                            $this->addToDailyReputation($favorite, $spaceSettings[4] / $scoreCount, $dailyLimit);
+                            ReputationUser::addToDailyReputation($favorite, $spaceSettings['smb_favorites_content'] / $scoreCount, $dailyLimit);
                         } else {
-                            $this->addToDailyReputation($favorite, $spaceSettings[4], $dailyLimit);
+                            ReputationUser::addToDailyReputation($favorite, $spaceSettings['smb_favorites_content'], $dailyLimit);
                         }
-
                         $scoreCount++;
                     }
                 }
-
                 $scoreCount = 1;
-
                 // now count how many comments this post has generated
                 $cacheId = 'comments_earned_cache_' . $userId . '_' . $content->id;
-                $comments = $this->getCommentsFromContent($content, $userId, $cacheId, false, $forceUpdate);
+                $comments = ReputationBase::getCommentsFromContent($content, $userId, $cacheId, false, $forceUpdate);
                 foreach ($comments as $comment) {
                     if ($decreaseWeighting == '1') {
-                        $this->addToDailyReputation($comment, $spaceSettings[5] / $scoreCount, $dailyLimit);
+                        ReputationUser::addToDailyReputation($comment, $spaceSettings['smb_comments_content'] / $scoreCount, $dailyLimit);
                     } else {
-                        $this->addToDailyReputation($comment, $spaceSettings[5], $dailyLimit);
+                        ReputationUser::addToDailyReputation($comment, $spaceSettings['smb_comments_content'], $dailyLimit);
                     }
-
                     $scoreCount++;
                 }
-
                 $scoreCount = 1;
             }
 
@@ -216,17 +194,17 @@ class ReputationUser extends ReputationBase
              * now handle posts that were created by others users
              * The user gets points for comments he created and for likes the comments have received
              */
-            $commentsPosted = $this->GetCommentsGeneratedByUser($userId, $content, $forceUpdate);
+            $commentsPosted = ReputationUser::GetCommentsGeneratedByUser($userId, $content, $forceUpdate);
             foreach ($commentsPosted as $commentPosted) {
-                $this->addToDailyReputation($commentPosted, $spaceSettings[2], $dailyLimit);
+                ReputationUser::addToDailyReputation($commentPosted, $spaceSettings['create_content'], $dailyLimit);
             }
 
-            $commentsLiked = $this->GetCommentsGeneratedByUserLikedByOthers($userId, $content, $forceUpdate);
+            $commentsLiked = ReputationUser::GetCommentsGeneratedByUserLikedByOthers($userId, $content, $forceUpdate);
             foreach ($commentsLiked as $commentLiked) {
                 if ($decreaseWeighting == '1') {
-                    $this->addToDailyReputation($commentLiked, $spaceSettings[3] / $scoreCount, $dailyLimit);
+                    ReputationUser::addToDailyReputation($commentLiked, $spaceSettings['smb_likes_content'] / $scoreCount, $dailyLimit);
                 } else {
-                    $this->addToDailyReputation($commentLiked, $spaceSettings[3], $dailyLimit);
+                    ReputationUser::addToDailyReputation($commentLiked, $spaceSettings['smb_likes_content'], $dailyLimit);
                 }
                 $scoreCount++;
             }
@@ -236,14 +214,16 @@ class ReputationUser extends ReputationBase
          * Iterate over daily_reputation structure to get final score
          */
         $reputationScore = 0;
-        foreach ($this->daily_reputation as $reputation) {
+        foreach (ReputationUser::$daily_reputation as $reputation) {
             $reputationScore += $reputation->getScore();
         }
 
         // reset this array for next user
-        $this->daily_reputation = array();
+        ReputationUser::$daily_reputation = array();
 
-        return $this->calculateUserScore($spaceSettings[0], $reputationScore, $spaceSettings[1]);
+
+
+        return ReputationUser::calculateUserScore($spaceSettings['functions'], $reputationScore, $spaceSettings['logarithm_base']);
     }
 
     /**
@@ -252,17 +232,17 @@ class ReputationUser extends ReputationBase
      * @param $daily_limit
      * @return array
      */
-    private function addToDailyReputation($content, $scoreToAdd, $daily_limit)
-    {
+    private function addToDailyReputation($content, $scoreToAdd, $daily_limit) {
+        global $daily_reputation;
         $date = date_create($content->created_at)->format('Y-m-d');
 
-        if (array_key_exists($date, $this->daily_reputation)) {
-            $currentDate = $this->daily_reputation[$date];
+        if (array_key_exists($date, ReputationUser::$daily_reputation)) {
+            $currentDate = ReputationUser::$daily_reputation[$date];
             $currentDate->addScore($scoreToAdd);
 
-            return array($date, $currentDate, $this->daily_reputation);
+            return array($date, $currentDate, ReputationUser::$daily_reputation);
         } else {
-            $this->daily_reputation[$date] = new DailyReputation($scoreToAdd, $daily_limit);
+            ReputationUser::$daily_reputation[$date] = new DailyReputation($scoreToAdd, $daily_limit);
         }
     }
 
@@ -274,34 +254,28 @@ class ReputationUser extends ReputationBase
      * @param $forceUpdate : Ignore cache
      * @return Comment[]
      */
-    public function GetCommentsGeneratedByUser($userId, Content $content, $forceUpdate = false)
-    {
+    public function GetCommentsGeneratedByUser($userId, Content $content, $forceUpdate = false) {
         $cacheId = 'comments_generated_cache_' . $userId . '_' . $content->id;
 
-        $commentsGenerated = Yii::app()->cache->get($cacheId);
+        $commentsGenerated = Yii::$app->cache->get($cacheId);
 
         if ($commentsGenerated === false || $forceUpdate === true) {
-            $object_model = strtolower($content->object_model);
-
+            $object = $content->object_model;
+            $objectModel = $object::tableName();
             $commentsGenerated = array();
-
             try {
-                $criteria = new CDbCriteria;
-                $criteria->alias = 'c';
-                $criteria->join = 'LEFT JOIN ' . $object_model . ' o ON c.object_id = o.id';
-                $criteria->join .= ' LEFT JOIN content ct ON o.id=ct.object_id';
-                $criteria->condition = 'ct.id=:contentId AND c.created_by=:userId AND c.object_model=ct.object_model';
-                $criteria->params = array(':contentId' => $content->id, ':userId' => $userId);
+                $query = Comment::find();
+                $query->leftJoin($objectModel . ' AS o', 'comment.object_id = o.id');
+                $query->leftJoin('content AS ct', 'o.id = ct.object_id');
+                $params = array(':contentId' => $content->id, ':userId' => $userId);
+                $query->where('ct.id=:contentId AND c.created_by=:userId AND c.object_model=ct.object_model', $params);
+                $commentsGenerated = $query->all();
 
-                $commentsGenerated = Comment::model()->findAll($criteria);
-
-                Yii::app()->cache->set($cacheId, $commentsGenerated, ReputationBase::CACHE_TIME_SECONDS);
-
+                Yii::$app->cache->set($cacheId, $commentsGenerated, ReputationBase::CACHE_TIME_SECONDS);
             } catch (Exception $e) {
-                Yii::trace('Couldn\'t count generated comments from object model: ' . $object_model);
+                Yii::trace('Couldn\'t count generated comments from object model: ' . $objectModel);
             }
         }
-
 
         return $commentsGenerated;
     }
@@ -315,35 +289,27 @@ class ReputationUser extends ReputationBase
      * @param $forceUpdate : Ignore cache
      * @return int
      */
-    public function GetCommentsGeneratedByUserLikedByOthers($userId, Content $content, $forceUpdate)
-    {
+    public function GetCommentsGeneratedByUserLikedByOthers($userId, Content $content, $forceUpdate) {
         $cacheId = 'comments_liked_cache_' . $userId . '_' . $content->id;
-
-        $commentsLiked = Yii::app()->cache->get($cacheId);
-
+        $commentsLiked = Yii::$app->cache->get($cacheId);
         if ($commentsLiked === false || $forceUpdate === true) {
-            $object_model = strtolower($content->object_model);
+            $object = $content->object_model;
+            $objectModel = $object::tableName();
             $commentsLiked = array();
-
             try {
-                $criteria = new CDbCriteria;
-                $criteria->alias = 'l';
-                $criteria->join = 'LEFT JOIN comment c ON c.id=l.object_id';
-                $criteria->join .= ' LEFT JOIN ' . $object_model . ' o ON c.object_id = o.id';
-                $criteria->join .= ' LEFT JOIN content ct ON o.id=ct.object_id';
-                $criteria->condition = 'l.object_model=\'comment\' AND l.created_by!=:userId AND ct.id=:contentId AND c.created_by=:userId AND c.object_model=ct.object_model';
-                $criteria->params = array(':contentId' => $content->id, ':userId' => $userId);
+                $query = Like::find();
+                $query->leftJoin('comment AS c', 'c.id = like.object_id');
+                $query->leftJoin($objectModel . ' AS o', 'c.object_id = o.id');
+                $query->leftJoin('content AS ct', 'o.id = ct.object_id');
+                $params = array(':contentId' => $content->id, ':userId' => $userId);
+                $query->where('like.object_model=\'humhub\modules\comment\models\Comment\' AND like.created_by!=:userId AND ct.id=:contentId AND c.created_by=:userId AND c.object_model=ct.object_model', $params);
+                $commentsLiked = $query->all();
 
-                $commentsLiked = Like::model()->findAll($criteria);
-
-                Yii::app()->cache->set($cacheId, $commentsLiked, ReputationBase::CACHE_TIME_SECONDS);
-
+                Yii::$app->cache->set($cacheId, $commentsLiked, ReputationBase::CACHE_TIME_SECONDS);
             } catch (Exception $e) {
-                Yii::trace('Couldn\'t count generated comments from object model: ' . $object_model);
+                Yii::trace('Couldn\'t count generated comments from object model: ' . $objectModel);
             }
         }
-
-
         return $commentsLiked;
     }
 
@@ -355,8 +321,7 @@ class ReputationUser extends ReputationBase
      * @param $logarithmBase : The logarithm base
      * @return int
      */
-    private function calculateUserScore($function, $reputationScore, $logarithmBase)
-    {
+    private function calculateUserScore($function, $reputationScore, $logarithm_base) {
         if ($function == ReputationBase::LINEAR) {
             return intval($reputationScore);
         } else {
@@ -364,10 +329,9 @@ class ReputationUser extends ReputationBase
                 return 0;
             } else {
                 // increase reputation score + 1 so log is not 0 when user has 1 point
-                $logValue = log($reputationScore + 1, $logarithmBase);
+                $logValue = log($reputationScore + 1, $logarithm_base);
+                return intval(round($logValue * 100));
             }
-
-            return intval(round($logValue * 100));
         }
     }
 
@@ -377,35 +341,13 @@ class ReputationUser extends ReputationBase
      * @param $spaceId
      * @throws CDbException
      */
-    private function deleteMissingUsers($spaceId)
-    {
-        $attributes = array('space_id' => $spaceId);
-        $reputationUsers = ReputationUser::model()->findAllByAttributes($attributes);
+    private function deleteMissingUsers($spaceId) {
+        $condition = array('space_id' => $spaceId);
+        $reputationUsers = ReputationUser::findAll($condition);
         foreach ($reputationUsers as $user) {
-            $criteria = new CDbCriteria;
-            $criteria->condition = 'space_id=:spaceId AND user_id=:userId';
-            $criteria->params = array(':spaceId' => $spaceId, ':userId' => $user->user_id);
-
-            if (SpaceMembership::model()->count($criteria) <= 0) {
-                $user->delete();
+            if (Membership::findOne('space_id=' . $spaceId . ' AND user_id=' . $user->user_id . '')) {
+                Membership::delete();
             }
         }
-    }
-
-    /**
-     * Get a array containing user e-mail addresses and their reputation score for a specific space
-     * @param $spaceId
-     * @return array()
-     */
-    public function getSpaceUsersAndScore($spaceId)
-    {
-        $reputationUsers = Yii::app()->db->createCommand()
-            ->select('u.email, ru.value')
-            ->from('reputation_user ru')
-            ->join('user u', 'ru.user_id=u.id')
-            ->where('space_id=:spaceId', array(':spaceId' => $spaceId))
-            ->queryAll();
-
-        return $reputationUsers;
-    }
+    }  
 }
